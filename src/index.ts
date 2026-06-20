@@ -83,7 +83,7 @@ async function main(): Promise<void> {
     });
   });
 
-  app.post("/mcp", bearerAuth, async (req, res) => {
+  app.post("/mcp", async (req, res) => {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
