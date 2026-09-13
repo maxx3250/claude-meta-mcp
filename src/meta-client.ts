@@ -12,14 +12,25 @@ export interface MetaErrorPayload {
   type?: string;
   code?: number;
   error_subcode?: number;
+  error_user_title?: string;
+  error_user_msg?: string;
   fbtrace_id?: string;
+}
+
+/** Human-readable one-liner that keeps Meta's explanatory fields (they are the useful part). */
+export function describeMetaError(meta: MetaErrorPayload): string {
+  const code = `${meta.code ?? "?"}${meta.error_subcode ? `/${meta.error_subcode}` : ""}`;
+  let text = `Meta Graph API error ${code}: ${meta.message}`;
+  if (meta.error_user_title) text += ` — ${meta.error_user_title}`;
+  if (meta.error_user_msg && meta.error_user_msg !== meta.error_user_title) text += `: ${meta.error_user_msg}`;
+  return text;
 }
 
 export class MetaApiError extends Error {
   readonly httpStatus: number;
   readonly meta: MetaErrorPayload;
   constructor(httpStatus: number, meta: MetaErrorPayload) {
-    super(`Meta Graph API error ${meta.code ?? "?"}: ${meta.message}`);
+    super(describeMetaError(meta));
     this.name = "MetaApiError";
     this.httpStatus = httpStatus;
     this.meta = meta;

@@ -360,12 +360,19 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
           .describe("Daily budget in account currency cents (e.g. 1000 = €10.00). Set on Campaign for CBO."),
         lifetime_budget_cents: z.number().int().positive().optional(),
         bid_strategy: bidStrategySchema.optional(),
+        is_adset_budget_sharing_enabled: z
+          .boolean()
+          .optional()
+          .describe(
+            "Only relevant WITHOUT a campaign budget (ad set budgets). Meta requires it: true = ad sets may share " +
+              "up to 20% of their budget with each other, false = strict per-ad-set budgets (default false)."
+          ),
       },
       annotations: WRITE,
     },
     async ({
       account_id, name, objective, special_ad_categories,
-      daily_budget_cents, lifetime_budget_cents, bid_strategy,
+      daily_budget_cents, lifetime_budget_cents, bid_strategy, is_adset_budget_sharing_enabled,
     }) => {
       const body: Record<string, string | number> = {
         name,
@@ -388,6 +395,10 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
         body.lifetime_budget = lifetime_budget_cents;
       }
       if (bid_strategy) body.bid_strategy = bid_strategy;
+      if (!daily_budget_cents && !lifetime_budget_cents) {
+        // Required by Meta since 2025 for campaigns that leave budgets on the ad sets.
+        body.is_adset_budget_sharing_enabled = String(is_adset_budget_sharing_enabled ?? false);
+      }
 
       const data = await meta.post(`/${normalizeAdAccountId(account_id)}/campaigns`, body);
       return asJson(data);
@@ -406,14 +417,21 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
         daily_budget_cents: z.number().int().positive().optional(),
         lifetime_budget_cents: z.number().int().positive().optional(),
         bid_strategy: bidStrategySchema.optional(),
+        is_adset_budget_sharing_enabled: z.boolean().optional().describe("Ad-set budget sharing (only without campaign budget)"),
         confirm_budget_increase: confirmBudgetSchema,
       },
       annotations: WRITE,
     },
-    async ({ campaign_id, name, daily_budget_cents, lifetime_budget_cents, bid_strategy, confirm_budget_increase }) => {
+    async ({
+      campaign_id, name, daily_budget_cents, lifetime_budget_cents, bid_strategy,
+      is_adset_budget_sharing_enabled, confirm_budget_increase,
+    }) => {
       const body: Record<string, string | number> = {};
       if (name !== undefined) body.name = name;
       if (bid_strategy) body.bid_strategy = bid_strategy;
+      if (is_adset_budget_sharing_enabled !== undefined) {
+        body.is_adset_budget_sharing_enabled = String(is_adset_budget_sharing_enabled);
+      }
       if (daily_budget_cents || lifetime_budget_cents) {
         const current = await meta.get<{ daily_budget?: string; lifetime_budget?: string }>(`/${campaign_id}`, {
           fields: "id,daily_budget,lifetime_budget",
