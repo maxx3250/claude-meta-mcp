@@ -6,13 +6,95 @@
  *   - Campaign / Ad Set / Ad CRUD (PAUSED-default for safety)
  *   - Ad Creative create + delete
  *
- * All writes default to status=PAUSED so an accidental tool-call never
- * activates an ad without the user's explicit follow-up.
+ * All creates are forced to status=PAUSED and no update tool can change a
+ * status — activation only happens through the explicit set_*_status tools.
+ * Budget increases need confirm_budget_increase=true and are capped by
+ * MAX_DAILY_BUDGET_CENTS / MAX_LIFETIME_BUDGET_CENTS (src/lib/guards.ts).
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MetaClient } from "./meta-client.js";
+import { config } from "./config.js";
+import { assertBudgetChangeAllowed, parseCents } from "./lib/guards.js";
+import {
+  targetingSchema,
+  mergeTargeting,
+  stripReadOnlyTargetingKeys,
+  changedTargetingKeys,
+  type Targeting,
+} from "./lib/targeting.js";
+
+const WRITE = { readOnlyHint: false, destructiveHint: false, openWorldHint: true } as const;
+const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, openWorldHint: true } as const;
+
+const bidStrategySchema = z
+  .enum(["LOWEST_COST_WITHOUT_CAP", "LOWEST_COST_WITH_BID_CAP", "COST_CAP", "LOWEST_COST_WITH_MIN_ROAS"])
+  .describe("Bid strategy");
+
+const optimizationGoalSchema = z
+  .string()
+  .describe(
+    "Optimization goal, must fit the campaign objective. Common: OFFSITE_CONVERSIONS, VALUE, LINK_CLICKS, " +
+      "LANDING_PAGE_VIEWS, REACH, IMPRESSIONS, POST_ENGAGEMENT, THRUPLAY, LEAD_GENERATION, QUALITY_LEAD, CONVERSATIONS"
+  );
+
+const promotedObjectSchema = z
+  .object({
+    pixel_id: z.string().optional().describe("Meta Pixel / dataset ID (list_pixels)"),
+    custom_event_type: z
+      .string()
+      .optional()
+      .describe("Standard event to optimize for: PURCHASE, ADD_TO_CART, INITIATED_CHECKOUT, LEAD, COMPLETE_REGISTRATION, CONTENT_VIEW, SEARCH, ADD_TO_WISHLIST, CONTACT, SUBSCRIBE, OTHER"),
+    custom_event_str: z.string().optional().describe("Custom event name when custom_event_type is OTHER"),
+    page_id: z.string().optional(),
+    product_catalog_id: z.string().optional(),
+    product_set_id: z.string().optional(),
+    application_id: z.string().optional(),
+    object_store_url: z.string().optional(),
+  })
+  .passthrough()
+  .describe("What the ad set optimizes for. Conversion ad sets need pixel_id + custom_event_type.");
+
+const confirmBudgetSchema = z
+  .boolean()
+  .optional()
+  .describe(
+    "Must be true to RAISE a budget. Only set it after the user explicitly agreed to the new amount. Lowering never needs it."
+  );
+
+const statusSchema = z
+  .enum(["ACTIVE", "PAUSED", "ARCHIVED"])
+  .describe("ACTIVE starts delivery and spending immediately");
+
+function registerStatusTool(
+  server: McpServer,
+  meta: MetaClient,
+  name: string,
+  idKey: "campaign_id" | "adset_id" | "ad_id",
+  label: string
+): void {
+  server.registerTool(
+    name,
+    {
+      description:
+        `Set the status of a ${label}. This is the ONLY tool that can activate a ${label} (status ACTIVE) and thereby ` +
+        "start spending — call it only after the user explicitly asked to go live. PAUSED stops delivery, ARCHIVED " +
+        "hides it. WRITE OPERATION.",
+      inputSchema: {
+        [idKey]: z.string().describe(`${label} ID`),
+        status: statusSchema,
+      } as Record<string, z.ZodTypeAny>,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async (args: Record<string, unknown>) => {
+      const id = String(args[idKey]);
+      const status = String(args.status);
+      const data = await meta.post(`/${id}`, { status });
+      return asJson({ result: data, [idKey]: id, status });
+    }
+  );
+}
 
 function asJson(value: unknown): { content: { type: "text"; text: string }[] } {
   return {
@@ -43,6 +125,7 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "upload_ad_image",
     {
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       description:
         "Upload an image to an ad account's image library. Returns the image hash (use this in ad creative `image_hash`). WRITE OPERATION.",
       inputSchema: {
@@ -68,6 +151,7 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "list_ad_images",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description: "List images previously uploaded to this ad account.",
       inputSchema: {
         account_id: z.string().describe("Ad account ID"),
@@ -86,6 +170,7 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "upload_ad_video",
     {
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       description:
         "Upload a video to an ad account. Small videos (<50MB) upload in one request. Returns the video ID. " +
         "Videos process asynchronously — use get_video_processing_status to poll readiness. WRITE OPERATION.",
@@ -120,6 +205,7 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "get_video_processing_status",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "Check whether an uploaded video has finished processing. Returns status_code (e.g. 'ready', 'processing', 'error') and any error reason.",
       inputSchema: {
@@ -137,6 +223,7 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "list_ad_videos",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description: "List videos uploaded to this ad account.",
       inputSchema: {
         account_id: z.string().describe("Ad account ID"),
@@ -157,6 +244,7 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "create_ad_creative",
     {
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       description:
         "Create a reusable ad creative (link-ad with image, image-only, or video creative). Required for create_ad. " +
         "WRITE OPERATION. Use upload_ad_image / upload_ad_video first to obtain the image_hash / video_id.",
@@ -233,6 +321,7 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "delete_ad_creative",
     {
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       description: "Delete an ad creative. DESTRUCTIVE — cannot be undone.",
       inputSchema: { creative_id: z.string().describe("Creative ID") },
     },
@@ -248,7 +337,8 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
     "create_campaign",
     {
       description:
-        "Create a new campaign. Defaults to status=PAUSED for safety — explicitly set status=ACTIVE to launch. WRITE OPERATION.",
+        "Create a new campaign. ALWAYS created PAUSED — activation is a separate, explicit step via set_campaign_status. " +
+        "WRITE OPERATION.",
       inputSchema: {
         account_id: z.string().describe("Ad account ID"),
         name: z.string().describe("Campaign name"),
@@ -258,7 +348,6 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
             "OUTCOME_LEADS", "OUTCOME_APP_PROMOTION", "OUTCOME_SALES",
           ])
           .describe("Campaign objective (Outcome-Driven Ad Experience format)"),
-        status: z.enum(["ACTIVE", "PAUSED"]).optional().describe("Default: PAUSED"),
         special_ad_categories: z
           .array(z.enum(["NONE", "EMPLOYMENT", "HOUSING", "CREDIT", "ISSUES_ELECTIONS_POLITICS"]))
           .optional()
@@ -270,20 +359,46 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
           .optional()
           .describe("Daily budget in account currency cents (e.g. 1000 = €10.00). Set on Campaign for CBO."),
         lifetime_budget_cents: z.number().int().positive().optional(),
+        bid_strategy: bidStrategySchema.optional(),
+        is_adset_budget_sharing_enabled: z
+          .boolean()
+          .optional()
+          .describe(
+            "Only relevant WITHOUT a campaign budget (ad set budgets). Meta requires it: true = ad sets may share " +
+              "up to 20% of their budget with each other, false = strict per-ad-set budgets (default false)."
+          ),
       },
+      annotations: WRITE,
     },
     async ({
-      account_id, name, objective, status, special_ad_categories,
-      daily_budget_cents, lifetime_budget_cents,
+      account_id, name, objective, special_ad_categories,
+      daily_budget_cents, lifetime_budget_cents, bid_strategy, is_adset_budget_sharing_enabled,
     }) => {
       const body: Record<string, string | number> = {
         name,
         objective,
-        status: status ?? "PAUSED",
+        status: "PAUSED",
         special_ad_categories: JSON.stringify(special_ad_categories ?? ["NONE"]),
       };
-      if (daily_budget_cents) body.daily_budget = daily_budget_cents;
-      if (lifetime_budget_cents) body.lifetime_budget = lifetime_budget_cents;
+      if (daily_budget_cents) {
+        assertBudgetChangeAllowed({
+          kind: "daily", requestedCents: daily_budget_cents, confirm: false,
+          capCents: config.limits.maxDailyBudgetCents,
+        });
+        body.daily_budget = daily_budget_cents;
+      }
+      if (lifetime_budget_cents) {
+        assertBudgetChangeAllowed({
+          kind: "lifetime", requestedCents: lifetime_budget_cents, confirm: false,
+          capCents: config.limits.maxLifetimeBudgetCents,
+        });
+        body.lifetime_budget = lifetime_budget_cents;
+      }
+      if (bid_strategy) body.bid_strategy = bid_strategy;
+      if (!daily_budget_cents && !lifetime_budget_cents) {
+        // Required by Meta since 2025 for campaigns that leave budgets on the ad sets.
+        body.is_adset_budget_sharing_enabled = String(is_adset_budget_sharing_enabled ?? false);
+      }
 
       const data = await meta.post(`/${normalizeAdAccountId(account_id)}/campaigns`, body);
       return asJson(data);
@@ -293,24 +408,52 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "update_campaign",
     {
-      description: "Update a campaign's name, status, or budget. WRITE OPERATION.",
+      description:
+        "Update a campaign's name, budget or bid strategy. Status is NOT changed here — use set_campaign_status. " +
+        "Raising a budget requires confirm_budget_increase=true after the user agreed. WRITE OPERATION.",
       inputSchema: {
         campaign_id: z.string(),
         name: z.string().optional(),
-        status: z.enum(["ACTIVE", "PAUSED", "ARCHIVED"]).optional(),
         daily_budget_cents: z.number().int().positive().optional(),
         lifetime_budget_cents: z.number().int().positive().optional(),
+        bid_strategy: bidStrategySchema.optional(),
+        is_adset_budget_sharing_enabled: z.boolean().optional().describe("Ad-set budget sharing (only without campaign budget)"),
+        confirm_budget_increase: confirmBudgetSchema,
       },
+      annotations: WRITE,
     },
-    async ({ campaign_id, name, status, daily_budget_cents, lifetime_budget_cents }) => {
+    async ({
+      campaign_id, name, daily_budget_cents, lifetime_budget_cents, bid_strategy,
+      is_adset_budget_sharing_enabled, confirm_budget_increase,
+    }) => {
       const body: Record<string, string | number> = {};
       if (name !== undefined) body.name = name;
-      if (status !== undefined) body.status = status;
-      if (daily_budget_cents) body.daily_budget = daily_budget_cents;
-      if (lifetime_budget_cents) body.lifetime_budget = lifetime_budget_cents;
+      if (bid_strategy) body.bid_strategy = bid_strategy;
+      if (is_adset_budget_sharing_enabled !== undefined) {
+        body.is_adset_budget_sharing_enabled = String(is_adset_budget_sharing_enabled);
+      }
+      if (daily_budget_cents || lifetime_budget_cents) {
+        const current = await meta.get<{ daily_budget?: string; lifetime_budget?: string }>(`/${campaign_id}`, {
+          fields: "id,daily_budget,lifetime_budget",
+        });
+        if (daily_budget_cents) {
+          assertBudgetChangeAllowed({
+            kind: "daily", currentCents: parseCents(current.daily_budget), requestedCents: daily_budget_cents,
+            confirm: Boolean(confirm_budget_increase), capCents: config.limits.maxDailyBudgetCents,
+          });
+          body.daily_budget = daily_budget_cents;
+        }
+        if (lifetime_budget_cents) {
+          assertBudgetChangeAllowed({
+            kind: "lifetime", currentCents: parseCents(current.lifetime_budget), requestedCents: lifetime_budget_cents,
+            confirm: Boolean(confirm_budget_increase), capCents: config.limits.maxLifetimeBudgetCents,
+          });
+          body.lifetime_budget = lifetime_budget_cents;
+        }
+      }
       if (Object.keys(body).length === 0) throw new Error("Nothing to update — provide at least one field");
       const data = await meta.post(`/${campaign_id}`, body);
-      return asJson(data);
+      return asJson({ result: data, changed_fields: Object.keys(body) });
     }
   );
 
@@ -320,6 +463,7 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
       description:
         "Delete (or rather: soft-delete) a campaign by setting its status to DELETED. DESTRUCTIVE.",
       inputSchema: { campaign_id: z.string() },
+      annotations: DESTRUCTIVE,
     },
     async ({ campaign_id }) => {
       const data = await meta.delete(`/${campaign_id}`);
@@ -333,8 +477,11 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
     "create_adset",
     {
       description:
-        "Create an ad set inside a campaign. Defaults to status=PAUSED. WRITE OPERATION. " +
-        "Targeting is required — see https://developers.facebook.com/docs/marketing-api/audiences/reference/targeting-spec/ for the full spec.",
+        "Create an ad set inside a campaign. ALWAYS created PAUSED — activation is a separate, explicit step via " +
+        "set_adset_status. For conversion ad sets (optimization_goal OFFSITE_CONVERSIONS / VALUE) pass promoted_object " +
+        "with pixel_id + custom_event_type (see list_pixels, get_pixel_events). Meta usually requires " +
+        "targeting.targeting_automation.advantage_audience (0 or 1) to be set explicitly. Use estimate_audience first " +
+        "to sanity-check the targeting. WRITE OPERATION.",
       inputSchema: {
         account_id: z.string(),
         campaign_id: z.string(),
@@ -342,53 +489,64 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
         daily_budget_cents: z.number().int().positive().optional(),
         lifetime_budget_cents: z.number().int().positive().optional(),
         billing_event: z
-          .enum(["IMPRESSIONS", "LINK_CLICKS", "POST_ENGAGEMENT", "PAGE_LIKES", "VIDEO_VIEWS", "THRUPLAY"])
-          .default("IMPRESSIONS"),
-        optimization_goal: z
-          .enum([
-            "REACH", "LINK_CLICKS", "IMPRESSIONS", "POST_ENGAGEMENT",
-            "PAGE_LIKES", "VIDEO_VIEWS", "THRUPLAY", "LEAD_GENERATION",
-            "OFFSITE_CONVERSIONS", "LANDING_PAGE_VIEWS", "QUALITY_LEAD",
-          ])
-          .describe("Optimization goal — must be compatible with the campaign objective"),
-        targeting: z
-          .object({
-            geo_locations: z
-              .object({
-                countries: z.array(z.string().length(2)).optional().describe("ISO 3166-1 alpha-2 codes, e.g. ['AT','DE']"),
-                cities: z.array(z.object({ key: z.string(), radius: z.number().optional(), distance_unit: z.enum(["mile", "kilometer"]).optional() })).optional(),
-              })
-              .optional(),
-            age_min: z.number().int().min(13).max(65).optional(),
-            age_max: z.number().int().min(13).max(65).optional(),
-            genders: z.array(z.union([z.literal(1), z.literal(2)])).optional().describe("[1]=men, [2]=women, [1,2]=all"),
-            interests: z.array(z.object({ id: z.string(), name: z.string().optional() })).optional(),
-            publisher_platforms: z.array(z.enum(["facebook", "instagram", "messenger", "audience_network"])).optional(),
-          })
-          .describe("Targeting spec — at minimum geo_locations.countries"),
+          .string()
+          .optional()
+          .describe("Default IMPRESSIONS. Others: LINK_CLICKS, POST_ENGAGEMENT, PAGE_LIKES, VIDEO_VIEWS, THRUPLAY"),
+        optimization_goal: optimizationGoalSchema,
+        bid_strategy: bidStrategySchema.optional(),
+        bid_amount_cents: z.number().int().positive().optional().describe("Bid cap / cost cap in cents, required for some bid strategies"),
+        targeting: targetingSchema,
+        promoted_object: promotedObjectSchema.optional(),
+        destination_type: z.string().optional().describe("e.g. WEBSITE, APP, MESSENGER, INSTAGRAM_DIRECT, ON_AD"),
+        attribution_spec: z
+          .array(z.object({ event_type: z.string(), window_days: z.number().int() }))
+          .optional()
+          .describe("e.g. [{event_type:'CLICK_THROUGH',window_days:7},{event_type:'VIEW_THROUGH',window_days:1}]"),
         start_time: z.string().optional().describe("ISO 8601 start time"),
         end_time: z.string().optional().describe("ISO 8601 end time"),
-        status: z.enum(["ACTIVE", "PAUSED"]).optional().describe("Default: PAUSED"),
+        dsa_beneficiary: z.string().optional().describe("EU DSA: who benefits from the ads (required for EU-targeted ad sets)"),
+        dsa_payor: z.string().optional().describe("EU DSA: who pays for the ads (required for EU-targeted ad sets)"),
       },
+      annotations: WRITE,
     },
     async ({
       account_id, campaign_id, name,
       daily_budget_cents, lifetime_budget_cents,
-      billing_event, optimization_goal, targeting,
-      start_time, end_time, status,
+      billing_event, optimization_goal, bid_strategy, bid_amount_cents,
+      targeting, promoted_object, destination_type, attribution_spec,
+      start_time, end_time, dsa_beneficiary, dsa_payor,
     }) => {
       const body: Record<string, string | number> = {
         name,
         campaign_id,
-        billing_event,
+        billing_event: billing_event ?? "IMPRESSIONS",
         optimization_goal,
-        targeting: JSON.stringify(targeting),
-        status: status ?? "PAUSED",
+        targeting: JSON.stringify(stripReadOnlyTargetingKeys(targeting)),
+        status: "PAUSED",
       };
-      if (daily_budget_cents) body.daily_budget = daily_budget_cents;
-      if (lifetime_budget_cents) body.lifetime_budget = lifetime_budget_cents;
+      if (daily_budget_cents) {
+        assertBudgetChangeAllowed({
+          kind: "daily", requestedCents: daily_budget_cents, confirm: false,
+          capCents: config.limits.maxDailyBudgetCents,
+        });
+        body.daily_budget = daily_budget_cents;
+      }
+      if (lifetime_budget_cents) {
+        assertBudgetChangeAllowed({
+          kind: "lifetime", requestedCents: lifetime_budget_cents, confirm: false,
+          capCents: config.limits.maxLifetimeBudgetCents,
+        });
+        body.lifetime_budget = lifetime_budget_cents;
+      }
+      if (bid_strategy) body.bid_strategy = bid_strategy;
+      if (bid_amount_cents) body.bid_amount = bid_amount_cents;
+      if (promoted_object) body.promoted_object = JSON.stringify(promoted_object);
+      if (destination_type) body.destination_type = destination_type;
+      if (attribution_spec) body.attribution_spec = JSON.stringify(attribution_spec);
       if (start_time) body.start_time = start_time;
       if (end_time) body.end_time = end_time;
+      if (dsa_beneficiary) body.dsa_beneficiary = dsa_beneficiary;
+      if (dsa_payor) body.dsa_payor = dsa_payor;
 
       const data = await meta.post(`/${normalizeAdAccountId(account_id)}/adsets`, body);
       return asJson(data);
@@ -398,24 +556,107 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "update_adset",
     {
-      description: "Update an ad set's name, status, budget, or targeting. WRITE OPERATION.",
+      description:
+        "Update an ad set: name, budget, bid, attribution, schedule, DSA fields and targeting. NOT changeable after " +
+        "creation (Meta rule): optimization_goal, billing_event and promoted_object (pixel / conversion event) — " +
+        "create a new ad set for those. Targeting is applied as a MERGE by default: only the keys you pass change, everything else " +
+        "(ages, other audiences, placements) is kept — e.g. targeting:{geo_locations:{countries:['AT']}} drops DE and " +
+        "keeps the rest. Use targeting_unset to remove keys (e.g. ['excluded_custom_audiences']) and " +
+        "targeting_mode='replace' to overwrite the whole spec. Returns targeting_before / targeting_after for a " +
+        "before-after check. Status is NOT changed here — use set_adset_status. Raising a budget requires " +
+        "confirm_budget_increase=true after the user agreed. WRITE OPERATION.",
       inputSchema: {
         adset_id: z.string(),
         name: z.string().optional(),
-        status: z.enum(["ACTIVE", "PAUSED", "ARCHIVED"]).optional(),
         daily_budget_cents: z.number().int().positive().optional(),
         lifetime_budget_cents: z.number().int().positive().optional(),
+        bid_strategy: bidStrategySchema.optional(),
+        bid_amount_cents: z.number().int().positive().optional(),
+        attribution_spec: z
+          .array(z.object({ event_type: z.string(), window_days: z.number().int() }))
+          .optional(),
+        start_time: z.string().optional(),
+        end_time: z.string().optional(),
+        dsa_beneficiary: z.string().optional(),
+        dsa_payor: z.string().optional(),
+        targeting: targetingSchema.optional().describe("Partial targeting patch (merge) or full spec (replace)"),
+        targeting_unset: z
+          .array(z.string())
+          .optional()
+          .describe("Targeting keys to remove, dotted paths allowed: ['excluded_custom_audiences','geo_locations.cities']"),
+        targeting_mode: z
+          .enum(["merge", "replace"])
+          .optional()
+          .describe("merge (default): patch into the current targeting. replace: send exactly what you pass."),
+        confirm_budget_increase: confirmBudgetSchema,
       },
+      annotations: WRITE,
     },
-    async ({ adset_id, name, status, daily_budget_cents, lifetime_budget_cents }) => {
+    async (args) => {
+      const {
+        adset_id, name, daily_budget_cents, lifetime_budget_cents, bid_strategy, bid_amount_cents,
+        attribution_spec, start_time, end_time,
+        dsa_beneficiary, dsa_payor, targeting, targeting_unset, targeting_mode, confirm_budget_increase,
+      } = args;
       const body: Record<string, string | number> = {};
+      const touchesTargeting = targeting !== undefined || (targeting_unset?.length ?? 0) > 0;
+      const touchesBudget = Boolean(daily_budget_cents || lifetime_budget_cents);
+
+      let current: { daily_budget?: string; lifetime_budget?: string; targeting?: Targeting } = {};
+      if (touchesTargeting || touchesBudget) {
+        current = await meta.get(`/${adset_id}`, { fields: "id,name,daily_budget,lifetime_budget,targeting" });
+      }
+
       if (name !== undefined) body.name = name;
-      if (status !== undefined) body.status = status;
-      if (daily_budget_cents) body.daily_budget = daily_budget_cents;
-      if (lifetime_budget_cents) body.lifetime_budget = lifetime_budget_cents;
-      if (Object.keys(body).length === 0) throw new Error("Nothing to update");
+      if (daily_budget_cents) {
+        assertBudgetChangeAllowed({
+          kind: "daily", currentCents: parseCents(current.daily_budget), requestedCents: daily_budget_cents,
+          confirm: Boolean(confirm_budget_increase), capCents: config.limits.maxDailyBudgetCents,
+        });
+        body.daily_budget = daily_budget_cents;
+      }
+      if (lifetime_budget_cents) {
+        assertBudgetChangeAllowed({
+          kind: "lifetime", currentCents: parseCents(current.lifetime_budget), requestedCents: lifetime_budget_cents,
+          confirm: Boolean(confirm_budget_increase), capCents: config.limits.maxLifetimeBudgetCents,
+        });
+        body.lifetime_budget = lifetime_budget_cents;
+      }
+      if (bid_strategy) body.bid_strategy = bid_strategy;
+      if (bid_amount_cents) body.bid_amount = bid_amount_cents;
+      if (attribution_spec) body.attribution_spec = JSON.stringify(attribution_spec);
+      if (start_time) body.start_time = start_time;
+      if (end_time) body.end_time = end_time;
+      if (dsa_beneficiary) body.dsa_beneficiary = dsa_beneficiary;
+      if (dsa_payor) body.dsa_payor = dsa_payor;
+
+      let targetingBefore: Targeting | undefined;
+      let targetingAfter: Targeting | undefined;
+      if (touchesTargeting) {
+        targetingBefore = current.targeting ?? {};
+        targetingAfter =
+          targeting_mode === "replace"
+            ? stripReadOnlyTargetingKeys(targeting ?? {})
+            : mergeTargeting(targetingBefore, targeting ?? {}, targeting_unset ?? []);
+        body.targeting = JSON.stringify(targetingAfter);
+      }
+
+      if (Object.keys(body).length === 0) throw new Error("Nothing to update — provide at least one field");
       const data = await meta.post(`/${adset_id}`, body);
-      return asJson(data);
+      return asJson({
+        result: data,
+        changed_fields: Object.keys(body),
+        ...(targetingBefore && targetingAfter
+          ? {
+              targeting_changed_keys: changedTargetingKeys(
+                stripReadOnlyTargetingKeys(targetingBefore),
+                targetingAfter
+              ),
+              targeting_before: targetingBefore,
+              targeting_after: targetingAfter,
+            }
+          : {}),
+      });
     }
   );
 
@@ -424,6 +665,7 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
     {
       description: "Delete an ad set. DESTRUCTIVE.",
       inputSchema: { adset_id: z.string() },
+      annotations: DESTRUCTIVE,
     },
     async ({ adset_id }) => {
       const data = await meta.delete(`/${adset_id}`);
@@ -437,21 +679,22 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
     "create_ad",
     {
       description:
-        "Create an ad inside an ad set. Defaults to status=PAUSED. Requires a creative_id from create_ad_creative.",
+        "Create an ad inside an ad set. ALWAYS created PAUSED — activation is a separate, explicit step via " +
+        "set_ad_status. Requires a creative_id from create_ad_creative. WRITE OPERATION.",
       inputSchema: {
         account_id: z.string(),
         adset_id: z.string(),
         creative_id: z.string(),
         name: z.string(),
-        status: z.enum(["ACTIVE", "PAUSED"]).optional().describe("Default: PAUSED"),
       },
+      annotations: WRITE,
     },
-    async ({ account_id, adset_id, creative_id, name, status }) => {
+    async ({ account_id, adset_id, creative_id, name }) => {
       const data = await meta.post(`/${normalizeAdAccountId(account_id)}/ads`, {
         name,
         adset_id,
         creative: JSON.stringify({ creative_id }),
-        status: status ?? "PAUSED",
+        status: "PAUSED",
       });
       return asJson(data);
     }
@@ -460,18 +703,18 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "update_ad",
     {
-      description: "Update an ad (name, status, or creative). WRITE OPERATION.",
+      description:
+        "Update an ad's name or creative. Status is NOT changed here — use set_ad_status. WRITE OPERATION.",
       inputSchema: {
         ad_id: z.string(),
         name: z.string().optional(),
-        status: z.enum(["ACTIVE", "PAUSED", "ARCHIVED"]).optional(),
         creative_id: z.string().optional().describe("Replace the ad's creative"),
       },
+      annotations: WRITE,
     },
-    async ({ ad_id, name, status, creative_id }) => {
+    async ({ ad_id, name, creative_id }) => {
       const body: Record<string, string | number> = {};
       if (name !== undefined) body.name = name;
-      if (status !== undefined) body.status = status;
       if (creative_id) body.creative = JSON.stringify({ creative_id });
       if (Object.keys(body).length === 0) throw new Error("Nothing to update");
       const data = await meta.post(`/${ad_id}`, body);
@@ -484,6 +727,7 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
     {
       description: "Delete an ad. DESTRUCTIVE.",
       inputSchema: { ad_id: z.string() },
+      annotations: DESTRUCTIVE,
     },
     async ({ ad_id }) => {
       const data = await meta.delete(`/${ad_id}`);
@@ -491,9 +735,16 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
     }
   );
 
+  // ============================================================ Status (explicit activation)
+
+  registerStatusTool(server, meta, "set_campaign_status", "campaign_id", "campaign");
+  registerStatusTool(server, meta, "set_adset_status", "adset_id", "ad set");
+  registerStatusTool(server, meta, "set_ad_status", "ad_id", "ad");
+
   server.registerTool(
     "preview_ad",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "Render a preview of an ad for a given placement (returns HTML iframe markup). " +
         "Useful for QA before activating an ad.",

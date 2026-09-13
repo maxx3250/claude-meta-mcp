@@ -20,6 +20,16 @@ function optional(name: string, fallback: string): string {
   return value && value.trim() !== "" ? value : fallback;
 }
 
+function optionalInt(name: string): number | undefined {
+  const value = process.env[name];
+  if (!value || value.trim() === "") return undefined;
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`${name} must be a positive integer (cents), got "${value}"`);
+  }
+  return n;
+}
+
 export const config = {
   port: parseInt(optional("PORT", "3210"), 10),
   logLevel: optional("LOG_LEVEL", "info") as
@@ -29,7 +39,7 @@ export const config = {
     | "error",
   meta: {
     accessToken: required("META_ACCESS_TOKEN"),
-    apiVersion: optional("META_API_VERSION", "v22.0"),
+    apiVersion: optional("META_API_VERSION", "v26.0"),
   },
   /**
    * Bearer token a client must present in the Authorization header when
@@ -38,6 +48,15 @@ export const config = {
    */
   authToken: required("AUTH_TOKEN"),
   publicUrl: optional("PUBLIC_URL", "http://localhost:3210"),
+  /**
+   * Hard budget caps in account-currency cents. Undefined = no cap. Enforced
+   * server-side on create_campaign / create_adset / update_campaign /
+   * update_adset — a conversation cannot override them.
+   */
+  limits: {
+    maxDailyBudgetCents: optionalInt("MAX_DAILY_BUDGET_CENTS"),
+    maxLifetimeBudgetCents: optionalInt("MAX_LIFETIME_BUDGET_CENTS"),
+  },
 } as const;
 
 export type Config = typeof config;

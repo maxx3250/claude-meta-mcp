@@ -21,8 +21,9 @@ import { registerTools } from "./tools.js";
 import { registerWriteTools } from "./tools-write.js";
 import { registerInstagramTools } from "./tools-instagram.js";
 import { registerCatalogTools } from "./tools-catalogs.js";
+import { registerAudienceTools } from "./tools-audiences.js";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 
 function log(
   level: "debug" | "info" | "warn" | "error",
@@ -68,6 +69,7 @@ async function main(): Promise<void> {
   registerWriteTools(mcp, meta);
   registerInstagramTools(mcp, meta);
   registerCatalogTools(mcp, meta);
+  registerAudienceTools(mcp, meta);
 
   const app = express();
   app.disable("x-powered-by");

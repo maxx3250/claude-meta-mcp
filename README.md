@@ -6,12 +6,12 @@
 [![CI](https://github.com/maxx3250/claude-meta-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/maxx3250/claude-meta-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-Streamable_HTTP-blue.svg)](https://modelcontextprotocol.io/)
-[![Status](https://img.shields.io/badge/status-v0.4_alpha-orange.svg)](./CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.5_alpha-orange.svg)](./CHANGELOG.md)
 
-> **Status — v0.4.0 (single-tenant alpha).**
+> **Status — v0.5.0 (single-tenant alpha).**
 > One Meta System User token, one shared Bearer secret, no database. Perfect for personal use or a single agency account. Multi-tenant + OAuth 2.1 + DCR are on the roadmap (see [Roadmap](#roadmap)).
 >
-> **v0.4 adds read-only Product Catalog tools** (catalog discovery, feeds, products, diagnostics) on top of v0.3's full Ads CRUD and Instagram Business publishing. **47 tools** across four surfaces — Ads, Pages, Instagram, Catalogs.
+> **v0.5 makes ad sets fully steerable from a conversation**: complete targeting spec on create *and* update (custom audiences, exclusions, placements, Advantage+ audience), `promoted_object` for conversion ad sets, audience / pixel lookups, a delivery estimate, and a safety layer — activation only through explicit `set_*_status` tools, budget raises need confirmation, optional hard caps. Every tool carries MCP annotations (`readOnlyHint` / `destructiveHint`) so clients can auto-approve reads. **56 tools** across four surfaces — Ads, Pages, Instagram, Catalogs.
 
 ---
 
@@ -69,9 +69,14 @@ The server listens on `PORT` (default `3210`) and exposes:
 
 ## Available tools
 
-47 tools in v0.4 across four surfaces — Ads (read + write), Facebook Pages (read + write), Instagram Business (read + write), Product Catalogs (read).
+56 tools in v0.5 across four surfaces — Ads (read + write), Facebook Pages (read + write), Instagram Business (read + write), Product Catalogs (read).
 
-> **Safety:** every write tool that creates campaigns / ad sets / ads defaults to `status: PAUSED`. To go live you must explicitly pass `status: "ACTIVE"`. This prevents an LLM from accidentally spending money.
+> **Safety (v0.5):**
+> - Campaigns, ad sets and ads are **always created `PAUSED`** — there is no way to create something live.
+> - `update_*` tools **cannot change a status**. Going live is a separate, explicit call to `set_campaign_status` / `set_adset_status` / `set_ad_status`, so an MCP client shows it as its own confirmation.
+> - **Raising a budget** needs `confirm_budget_increase: true`; lowering never does. Optional hard caps `MAX_DAILY_BUDGET_CENTS` / `MAX_LIFETIME_BUDGET_CENTS` are enforced server-side and cannot be overridden from a conversation.
+> - Every tool is annotated: `readOnlyHint` on reads (clients such as ChatGPT developer mode auto-approve them), `destructiveHint` on deletes.
+> - Meta's rate limits (1 edit per object per 30 s, per-account bursts) are waited out and retried automatically.
 
 ### Meta Ads — read
 
@@ -82,9 +87,15 @@ The server listens on `PORT` (default `3210`) and exposes:
 | `list_campaigns` | List campaigns inside an ad account, optionally filtered by status |
 | `get_campaign` | Fetch one campaign's full configuration |
 | `list_adsets` | List ad sets under a campaign or an ad account |
+| `get_adset` | One ad set in full: targeting (audiences, exclusions, placements), `promoted_object`, optimization goal, bids, attribution, budgets, learning phase — use before/after `update_adset` |
 | `list_ads` | List ads under a campaign, ad set, or ad account |
 | `get_insights` | Performance metrics (impressions, clicks, spend, CTR, CPC, CPM, reach, conversions) at any level, with date presets / custom ranges and breakdowns |
 | `list_creatives` | List ad creatives inside an ad account |
+| `estimate_audience` | Meta's delivery estimate (reach bounds) for a targeting spec — sanity-check before writing |
+| `list_custom_audiences` | Custom / Lookalike / website audiences with size estimates and delivery status |
+| `get_custom_audience` | One audience in detail incl. rule (pixel + event + retention) and lookalike spec |
+| `list_pixels` | Pixels / datasets of an ad account (id for `promoted_object.pixel_id`) |
+| `get_pixel_events` | Events the pixel actually received in the last N days, with counts |
 
 ### Meta Ads — write & assets
 
@@ -97,15 +108,18 @@ The server listens on `PORT` (default `3210`) and exposes:
 | `list_ad_videos` | List videos uploaded to an ad account |
 | `create_ad_creative` | Create an ad creative from a Page post or `object_story_spec` (link_data / video_data) |
 | `delete_ad_creative` | Delete an ad creative |
-| `create_campaign` ⚠️ | Create a campaign (default `PAUSED`, requires objective + special_ad_categories) |
-| `update_campaign` ⚠️ | Update name / status / budget / bid strategy on a campaign |
+| `create_campaign` ⚠️ | Create a campaign (always `PAUSED`; objective, special_ad_categories, optional campaign budget, `is_adset_budget_sharing_enabled`) |
+| `update_campaign` ⚠️ | Update name / budget / bid strategy (budget raise needs `confirm_budget_increase`) |
 | `delete_campaign` ⚠️ | **Destructive** — delete a campaign |
-| `create_adset` ⚠️ | Create an ad set with full targeting (geo, age, gender, interests, placements) |
-| `update_adset` ⚠️ | Update an ad set (status, budget, schedule, targeting) |
+| `create_adset` ⚠️ | Create an ad set (always `PAUSED`) with the full targeting spec — geo incl. exclusions, age, gender, locales, interests, custom audiences + exclusions, per-platform positions, Advantage+ audience — plus `promoted_object` (pixel + conversion event), bid strategy, attribution, schedule, EU DSA fields |
+| `update_adset` ⚠️ | Update targeting as a **merge** (only the keys you pass change; `targeting_unset` removes keys; `targeting_mode: replace` overwrites), plus name, budget, bid, attribution, schedule. Returns `targeting_before` / `targeting_after`. Optimization goal, billing event and `promoted_object` are locked by Meta after creation |
 | `delete_adset` ⚠️ | **Destructive** — delete an ad set |
-| `create_ad` ⚠️ | Create an ad bound to an ad set + creative (default `PAUSED`) |
-| `update_ad` ⚠️ | Update an ad's name, status, or bound creative |
+| `create_ad` ⚠️ | Create an ad bound to an ad set + creative (always `PAUSED`) |
+| `update_ad` ⚠️ | Update an ad's name or bound creative |
 | `delete_ad` ⚠️ | **Destructive** — delete an ad |
+| `set_campaign_status` ⚠️ | The **only** way to activate a campaign (`ACTIVE` / `PAUSED` / `ARCHIVED`) |
+| `set_adset_status` ⚠️ | The **only** way to activate an ad set |
+| `set_ad_status` ⚠️ | The **only** way to activate an ad |
 | `preview_ad` | Render a preview HTML iframe for any placement (DESKTOP_FEED_STANDARD, INSTAGRAM_STANDARD, …) |
 
 ### Facebook Pages (read & write)
@@ -158,11 +172,13 @@ The server listens on `PORT` (default `3210`) and exposes:
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `META_ACCESS_TOKEN` | yes | — | Meta System User token (recommended, never expires) or long-lived user access token. Full v0.4 scopes: `ads_read`, `ads_management`, `business_management`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `pages_manage_metadata`, `instagram_basic`, `instagram_content_publish`, `instagram_manage_comments`, `instagram_manage_insights`, `catalog_management`. Subsets are allowed — missing scopes simply make the matching tools return 403. |
-| `META_API_VERSION` | no | `v22.0` | Graph API version |
+| `META_API_VERSION` | no | `v26.0` | Graph API version |
 | `AUTH_TOKEN` | yes | — | Shared bearer secret for `POST /mcp`. Generate with `openssl rand -hex 32` |
 | `PUBLIC_URL` | no | `http://localhost:3210` | Public URL (currently informational; v0.2 will use it for OAuth callbacks) |
 | `PORT` | no | `3210` | TCP port to bind |
 | `LOG_LEVEL` | no | `info` | `debug` / `info` / `warn` / `error` |
+| `MAX_DAILY_BUDGET_CENTS` | no | — | Hard cap for any daily budget written by the connector (account currency, cents). Unset = no cap |
+| `MAX_LIFETIME_BUDGET_CENTS` | no | — | Hard cap for any lifetime budget written by the connector |
 
 See [`.env.example`](./.env.example).
 
@@ -182,7 +198,7 @@ See [`.env.example`](./.env.example).
 
 ---
 
-## Architecture (v0.4)
+## Architecture (v0.5)
 
 ```
 ┌─────────────────────┐     POST /mcp        ┌──────────────────────────┐
@@ -191,14 +207,14 @@ See [`.env.example`](./.env.example).
 └─────────────────────┘                      │           │              │
                                              │           ▼              │
                                              │  Meta Graph API client   │
-                                             │  (axios, v22.0)          │
+                                             │  (axios, v26.0)          │
                                              └─────────────┬────────────┘
                                                            │
                                                            ▼
                                              https://graph.facebook.com
 ```
 
-No database. No state between requests. One Meta System User token, one Bearer token, 47 tools.
+No database. No state between requests. One Meta System User token, one Bearer token, 56 tools.
 
 For sequence diagrams and the planned v1.0 multi-tenant architecture, see [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
@@ -208,6 +224,11 @@ For sequence diagrams and the planned v1.0 multi-tenant architecture, see [`docs
 
 **v0.2 — Pages support** ✓ shipped
 - [x] `list_pages`, `list_page_posts`, `get_page_insights`, `create_page_post`, `delete_page_post`
+
+**v0.5 — Ad set steering + safety layer** ✓ shipped
+- [x] Full targeting spec on create + update (merge / unset / replace), `promoted_object`, DSA fields
+- [x] `get_adset`, `estimate_audience`, audience + pixel lookups
+- [x] Explicit activation via `set_*_status`, budget-raise confirmation, hard caps, MCP annotations, rate-limit retry
 
 **v0.3 — Ads write + Instagram** ✓ shipped
 - [x] Ads CRUD (campaigns, ad sets, ads, creatives)
