@@ -36,7 +36,10 @@ const geoSchema = z
       )
       .optional(),
     zips: z.array(z.object({ key: z.string() }).passthrough()).optional(),
-    location_types: z.array(z.enum(["home", "recent"])).optional(),
+    location_types: z
+      .array(z.string())
+      .optional()
+      .describe("e.g. home, recent, frequently_in"),
   })
   .passthrough();
 

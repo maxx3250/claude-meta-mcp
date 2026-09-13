@@ -37,6 +37,15 @@ export class MetaApiError extends Error {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Error 613 = rate limit; subcode 4841018 = "1 edit per 30 s per ad object". */
+export function isEditRateLimit(err: MetaApiError): boolean {
+  return err.meta.code === 613;
+}
+
 export class MetaClient {
   private readonly http: AxiosInstance;
   private readonly accessToken: string;
@@ -92,14 +101,33 @@ export class MetaClient {
     for (const [key, value] of Object.entries(body)) {
       if (value !== undefined) finalBody.append(key, String(value));
     }
-    try {
-      const response = await this.http.post<T>(path, finalBody, {
-        params: finalParams,
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      });
-      return response.data;
-    } catch (err) {
-      throw this.wrap(err);
+    // Meta throttles edits of the same ad object to 1 call per 30 s (error 613 /
+    // subcode 4841018). A model doing two edits in a row would otherwise fail on
+    // the second one, so wait out the window once and retry.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        const response = await this.http.post<T>(path, finalBody, {
+          params: finalParams,
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        });
+        return response.data;
+      } catch (err) {
+        const wrapped = this.wrap(err);
+        if (attempt < 3 && wrapped instanceof MetaApiError && isEditRateLimit(wrapped)) {
+          console.error(
+            JSON.stringify({
+              ts: new Date().toISOString(),
+              level: "warn",
+              msg: "Meta edit rate limit hit, retrying after 31s",
+              path,
+              attempt,
+            })
+          );
+          await sleep(31_000);
+          continue;
+        }
+        throw wrapped;
+      }
     }
   }
 
