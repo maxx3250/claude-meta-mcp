@@ -41,9 +41,40 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Error 613 = rate limit; subcode 4841018 = "1 edit per 30 s per ad object". */
-export function isEditRateLimit(err: MetaApiError): boolean {
-  return err.meta.code === 613;
+/**
+ * Meta's throttling family: 4 = app-level, 17 = ad-account-level ("User request
+ * limit reached"), 32 = page-level, 613 = per-object edit limit (1 per 30 s).
+ * All are transient — waiting out the window and retrying is the documented fix.
+ */
+export function isRateLimit(err: MetaApiError): boolean {
+  return [4, 17, 32, 613].includes(err.meta.code ?? -1);
+}
+
+const RATE_LIMIT_RETRY_MS = 31_000;
+const RATE_LIMIT_MAX_ATTEMPTS = 3;
+
+async function withRateLimitRetry<T>(path: string, fn: () => Promise<T>, wrap: (e: unknown) => Error): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      const wrapped = wrap(err);
+      if (attempt < RATE_LIMIT_MAX_ATTEMPTS && wrapped instanceof MetaApiError && isRateLimit(wrapped)) {
+        console.error(
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            level: "warn",
+            msg: `Meta rate limit (${wrapped.meta.code}) hit, retrying after ${RATE_LIMIT_RETRY_MS / 1000}s`,
+            path,
+            attempt,
+          })
+        );
+        await sleep(RATE_LIMIT_RETRY_MS);
+        continue;
+      }
+      throw wrapped;
+    }
+  }
 }
 
 export class MetaClient {
@@ -72,12 +103,14 @@ export class MetaClient {
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined) finalParams[key] = value;
     }
-    try {
-      const response = await this.http.get<T>(path, { params: finalParams });
-      return response.data;
-    } catch (err) {
-      throw this.wrap(err);
-    }
+    return withRateLimitRetry(
+      path,
+      async () => {
+        const response = await this.http.get<T>(path, { params: finalParams });
+        return response.data;
+      },
+      (e) => this.wrap(e)
+    );
   }
 
   /**
@@ -101,34 +134,20 @@ export class MetaClient {
     for (const [key, value] of Object.entries(body)) {
       if (value !== undefined) finalBody.append(key, String(value));
     }
-    // Meta throttles edits of the same ad object to 1 call per 30 s (error 613 /
-    // subcode 4841018). A model doing two edits in a row would otherwise fail on
-    // the second one, so wait out the window once and retry.
-    for (let attempt = 1; ; attempt += 1) {
-      try {
+    // Meta throttles edits of the same ad object to 1 call per 30 s (error 613)
+    // and bursts per ad account (error 17). A model doing two edits in a row
+    // would otherwise fail on the second one, so wait out the window and retry.
+    return withRateLimitRetry(
+      path,
+      async () => {
         const response = await this.http.post<T>(path, finalBody, {
           params: finalParams,
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
         });
         return response.data;
-      } catch (err) {
-        const wrapped = this.wrap(err);
-        if (attempt < 3 && wrapped instanceof MetaApiError && isEditRateLimit(wrapped)) {
-          console.error(
-            JSON.stringify({
-              ts: new Date().toISOString(),
-              level: "warn",
-              msg: "Meta edit rate limit hit, retrying after 31s",
-              path,
-              attempt,
-            })
-          );
-          await sleep(31_000);
-          continue;
-        }
-        throw wrapped;
-      }
-    }
+      },
+      (e) => this.wrap(e)
+    );
   }
 
   /**
@@ -211,12 +230,14 @@ export class MetaClient {
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined) finalParams[key] = value;
     }
-    try {
-      const response = await this.http.delete<T>(path, { params: finalParams });
-      return response.data;
-    } catch (err) {
-      throw this.wrap(err);
-    }
+    return withRateLimitRetry(
+      path,
+      async () => {
+        const response = await this.http.delete<T>(path, { params: finalParams });
+        return response.data;
+      },
+      (e) => this.wrap(e)
+    );
   }
 
   /**

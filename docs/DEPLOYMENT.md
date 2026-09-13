@@ -134,7 +134,7 @@ The connector exposes a raw Bearer-auth endpoint at `/mcp`. **claude.ai web requ
      }
    }
    ```
-3. Restart Claude Desktop. The 13 tools should appear under "meta".
+3. Restart Claude Desktop. The tools should appear under "meta".
 
 ### Option B — claude.ai web (OAuth 2.1 + DCR)
 
@@ -152,7 +152,7 @@ When the shim is in front:
 2. URL: `https://connector.example.com/mcp` (the shim's public URL)
 3. Save. claude.ai discovers the OAuth endpoints automatically.
 4. A login popup asks for the htpasswd user/password — enter it once.
-5. The 13 tools appear in the connector.
+5. The tools appear in the connector.
 
 (If you don't want to run the shim, you can run a private MCP gateway like supergateway in your own Claude Desktop instance, but that won't work with claude.ai web.)
 
@@ -173,7 +173,7 @@ curl -X POST https://connector.example.com/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
-# → JSON with 13 tools
+# → JSON listing all tools (56 in v0.5)
 ```
 
 ## 7. Updating

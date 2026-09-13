@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-09-13
+
+Ad sets become fully steerable from a conversation, with a safety layer in front of everything that moves money.
+
+### Added — Ad set targeting & conversion setup
+- Shared targeting schema (`src/lib/targeting.ts`) for `create_adset`, `update_adset`, `estimate_audience`: geo incl. `excluded_geo_locations`, age, gender, `locales`, interests, behaviors, `custom_audiences`, `excluded_custom_audiences`, `publisher_platforms` + `facebook_positions` / `instagram_positions` / `messenger_positions` / `audience_network_positions`, `device_platforms`, `targeting_automation.advantage_audience`, `flexible_spec`, `exclusions`. Unknown keys pass through.
+- `update_adset` now updates targeting as a **merge** (read-modify-write, because Meta replaces the whole spec): `targeting` patches, `targeting_unset` removes keys (dotted paths), `targeting_mode: "replace"` overwrites. Response carries `targeting_before`, `targeting_after`, `targeting_changed_keys`. Also: bid strategy / bid amount, attribution spec, schedule, EU DSA fields.
+- `create_adset`: `promoted_object` (pixel + `custom_event_type`), `bid_strategy`, `bid_amount_cents`, `attribution_spec`, `destination_type`, `dsa_beneficiary` / `dsa_payor`; `optimization_goal` and `billing_event` accept any Meta value.
+- `create_campaign`: `is_adset_budget_sharing_enabled` (Meta rejects budget-less campaigns without it — this was silently broken before), `bid_strategy`.
+
+### Added — read tools (6)
+- `get_adset` — full configuration incl. `promoted_object`, attribution, learning phase
+- `estimate_audience` — `/act_x/delivery_estimate` for a targeting spec
+- `list_custom_audiences`, `get_custom_audience`
+- `list_pixels`, `get_pixel_events` (aggregated `/pixel/stats` per event over N days)
+
+### Added — safety layer
+- `set_campaign_status`, `set_adset_status`, `set_ad_status` are the only tools that can activate anything.
+- Creates are always `PAUSED` (`status` parameter removed from `create_campaign` / `create_adset` / `create_ad`).
+- Budget raises on `update_campaign` / `update_adset` require `confirm_budget_increase: true`; lowering does not.
+- Optional hard caps `MAX_DAILY_BUDGET_CENTS` / `MAX_LIFETIME_BUDGET_CENTS`, enforced on create and update.
+- MCP tool annotations on all 56 tools (`readOnlyHint` for reads, `destructiveHint` for deletes).
+
+### Changed
+- Meta client retries once/twice after rate-limit errors 4 / 17 / 32 / 613 (31 s wait) instead of failing the tool call.
+- Graph error messages now include Meta's `error_user_title` / `error_user_msg` and subcode.
+- Default `META_API_VERSION` is `v26.0`.
+- Unit tests (`npm test`, node:test via tsx) for the targeting merge and budget guards; CI runs them.
+
+### Breaking
+- `status` removed from `update_campaign`, `update_adset`, `update_ad` and from all `create_*` tools → use `set_*_status`.
+- `update_adset` no longer accepts `optimization_goal`, `billing_event`, `promoted_object`: Meta rejects changes to these on an existing ad set ("create a new ad set instead"), verified live.
+
+### Tool count
+- v0.4.0: 47 tools
+- **v0.5.0: 56 tools** (+6 reads, +3 status)
+
 ## [0.4.0] — 2026-05-11
 
 Added read-only Product Catalog tools (catalog discovery, feeds, products, diagnostics) — Phase 1 of the Catalog Management roadmap.

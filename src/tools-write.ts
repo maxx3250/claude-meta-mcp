@@ -557,8 +557,9 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
     "update_adset",
     {
       description:
-        "Update an ad set: name, budget, bid, optimization goal, promoted_object (pixel + conversion event), schedule, " +
-        "and targeting. Targeting is applied as a MERGE by default: only the keys you pass change, everything else " +
+        "Update an ad set: name, budget, bid, attribution, schedule, DSA fields and targeting. NOT changeable after " +
+        "creation (Meta rule): optimization_goal, billing_event and promoted_object (pixel / conversion event) — " +
+        "create a new ad set for those. Targeting is applied as a MERGE by default: only the keys you pass change, everything else " +
         "(ages, other audiences, placements) is kept — e.g. targeting:{geo_locations:{countries:['AT']}} drops DE and " +
         "keeps the rest. Use targeting_unset to remove keys (e.g. ['excluded_custom_audiences']) and " +
         "targeting_mode='replace' to overwrite the whole spec. Returns targeting_before / targeting_after for a " +
@@ -571,9 +572,6 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
         lifetime_budget_cents: z.number().int().positive().optional(),
         bid_strategy: bidStrategySchema.optional(),
         bid_amount_cents: z.number().int().positive().optional(),
-        optimization_goal: optimizationGoalSchema.optional(),
-        billing_event: z.string().optional(),
-        promoted_object: promotedObjectSchema.optional(),
         attribution_spec: z
           .array(z.object({ event_type: z.string(), window_days: z.number().int() }))
           .optional(),
@@ -597,7 +595,7 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
     async (args) => {
       const {
         adset_id, name, daily_budget_cents, lifetime_budget_cents, bid_strategy, bid_amount_cents,
-        optimization_goal, billing_event, promoted_object, attribution_spec, start_time, end_time,
+        attribution_spec, start_time, end_time,
         dsa_beneficiary, dsa_payor, targeting, targeting_unset, targeting_mode, confirm_budget_increase,
       } = args;
       const body: Record<string, string | number> = {};
@@ -626,9 +624,6 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
       }
       if (bid_strategy) body.bid_strategy = bid_strategy;
       if (bid_amount_cents) body.bid_amount = bid_amount_cents;
-      if (optimization_goal) body.optimization_goal = optimization_goal;
-      if (billing_event) body.billing_event = billing_event;
-      if (promoted_object) body.promoted_object = JSON.stringify(promoted_object);
       if (attribution_spec) body.attribution_spec = JSON.stringify(attribution_spec);
       if (start_time) body.start_time = start_time;
       if (end_time) body.end_time = end_time;
