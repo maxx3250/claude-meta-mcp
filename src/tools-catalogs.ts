@@ -31,6 +31,7 @@ export function registerCatalogTools(server: McpServer, meta: MetaClient): void 
   server.registerTool(
     "list_businesses",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "List all Meta Business Manager accounts reachable from the authenticated System User. Discovery walks /me/adaccounts and /me/accounts (Pages) and deduplicates the parent businesses — /me/businesses returns empty for System User tokens. Use the returned business IDs as input to list_product_catalogs. Read-only.",
       inputSchema: {
@@ -79,6 +80,7 @@ export function registerCatalogTools(server: McpServer, meta: MetaClient): void 
   server.registerTool(
     "list_product_catalogs",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "List product catalogs owned by a Business. Returns id, name, vertical, product_count and feed_count per catalog. Read-only.",
       inputSchema: {
@@ -104,6 +106,7 @@ export function registerCatalogTools(server: McpServer, meta: MetaClient): void 
   server.registerTool(
     "get_product_catalog",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "Fetch full details for a single product catalog including name, vertical, product/feed counts and configuration.",
       inputSchema: {
@@ -126,6 +129,7 @@ export function registerCatalogTools(server: McpServer, meta: MetaClient): void 
   server.registerTool(
     "list_product_feeds",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "List product feeds attached to a catalog. Returns id, name, schedule (pull frequency), file_name, latest_upload status and item counts. Read-only.",
       inputSchema: {
@@ -148,6 +152,7 @@ export function registerCatalogTools(server: McpServer, meta: MetaClient): void 
   server.registerTool(
     "get_catalog_diagnostics",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "Fetch aggregated catalog issues (rejected items, missing fields, image problems) from Meta's diagnostics endpoint. Falls back to the latest feed upload's error report if /diagnostics returns no rows. Read-only.",
       inputSchema: {
@@ -238,6 +243,7 @@ export function registerCatalogTools(server: McpServer, meta: MetaClient): void 
   server.registerTool(
     "list_catalog_products",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "List products inside a catalog, single page. Returns paging.next which you can pass back via `after` to fetch the next page. Read-only. Use sparingly on huge catalogs — Meta rate-limits this edge.",
       inputSchema: {

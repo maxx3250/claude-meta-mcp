@@ -61,6 +61,7 @@ export function registerInstagramTools(server: McpServer, meta: MetaClient): voi
   server.registerTool(
     "list_instagram_accounts",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "List Instagram Business / Creator accounts connected to Pages the System User manages. " +
         "Each entry returns the IG user ID (use this for posts, insights, comments).",
@@ -87,6 +88,7 @@ export function registerInstagramTools(server: McpServer, meta: MetaClient): voi
   server.registerTool(
     "list_instagram_posts",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description: "List recent media items (posts, reels, stories) on an Instagram Business Account.",
       inputSchema: {
         ig_user_id: z.string().describe("Instagram Business Account ID (from list_instagram_accounts)"),
@@ -109,6 +111,7 @@ export function registerInstagramTools(server: McpServer, meta: MetaClient): voi
   server.registerTool(
     "get_instagram_insights",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "Fetch insights metrics for an Instagram Business account (reach, impressions, profile_views, follower_count). " +
         "Provide either a date_preset OR a since/until pair.",
@@ -141,6 +144,7 @@ export function registerInstagramTools(server: McpServer, meta: MetaClient): voi
   server.registerTool(
     "get_instagram_post_insights",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description: "Fetch per-post insights (engagement, reach, impressions, saves) for a single IG media item.",
       inputSchema: {
         media_id: z.string().describe("IG media item ID"),
@@ -163,6 +167,7 @@ export function registerInstagramTools(server: McpServer, meta: MetaClient): voi
   server.registerTool(
     "create_instagram_post",
     {
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       description:
         "Publish a single image, video, or reel to an Instagram Business account. WRITE OPERATION. " +
         "Image/Video must be reachable via a public URL (Meta downloads it server-side). " +
@@ -221,6 +226,7 @@ export function registerInstagramTools(server: McpServer, meta: MetaClient): voi
   server.registerTool(
     "create_instagram_carousel",
     {
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       description:
         "Publish a multi-item carousel (2–10 images/videos) to an Instagram Business account. WRITE OPERATION.",
       inputSchema: {
@@ -289,6 +295,7 @@ export function registerInstagramTools(server: McpServer, meta: MetaClient): voi
   server.registerTool(
     "delete_instagram_media",
     {
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       description: "Delete an Instagram media item (post/reel/story). DESTRUCTIVE.",
       inputSchema: {
         media_id: z.string(),
@@ -307,6 +314,7 @@ export function registerInstagramTools(server: McpServer, meta: MetaClient): voi
   server.registerTool(
     "list_instagram_comments",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description: "List comments on an IG media item.",
       inputSchema: {
         media_id: z.string(),
@@ -328,6 +336,7 @@ export function registerInstagramTools(server: McpServer, meta: MetaClient): voi
   server.registerTool(
     "reply_instagram_comment",
     {
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       description: "Reply to a comment on an IG post. WRITE OPERATION.",
       inputSchema: {
         comment_id: z.string().describe("ID of the comment to reply to"),
@@ -349,6 +358,7 @@ export function registerInstagramTools(server: McpServer, meta: MetaClient): voi
   server.registerTool(
     "delete_instagram_comment",
     {
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       description: "Delete a comment from an IG post. DESTRUCTIVE.",
       inputSchema: {
         comment_id: z.string(),
@@ -365,6 +375,7 @@ export function registerInstagramTools(server: McpServer, meta: MetaClient): voi
   server.registerTool(
     "hide_instagram_comment",
     {
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       description: "Hide or unhide a comment from public view (less destructive than delete). WRITE OPERATION.",
       inputSchema: {
         comment_id: z.string(),

@@ -81,6 +81,7 @@ export function registerTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "list_ad_accounts",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "List all Meta ad accounts the authenticated user has access to. Returns id, name, currency, account status and timezone.",
       inputSchema: {
@@ -106,6 +107,7 @@ export function registerTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "get_ad_account",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "Fetch details for a single Meta ad account including spend cap, balance, and amount spent today.",
       inputSchema: {
@@ -134,6 +136,7 @@ export function registerTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "list_campaigns",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "List campaigns inside an ad account. Read-only — does not modify any campaign.",
       inputSchema: {
@@ -167,6 +170,7 @@ export function registerTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "get_campaign",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description: "Fetch a single campaign by ID with its full configuration.",
       inputSchema: {
         campaign_id: z.string().describe("Campaign ID"),
@@ -185,6 +189,7 @@ export function registerTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "list_adsets",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description: "List ad sets inside a campaign or an ad account.",
       inputSchema: {
         parent_id: z
@@ -212,6 +217,7 @@ export function registerTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "list_ads",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description: "List ads inside a campaign, ad set, or ad account.",
       inputSchema: {
         parent_id: z
@@ -234,6 +240,7 @@ export function registerTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "get_insights",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "Performance metrics (impressions, clicks, spend, CTR, CPC, CPM, conversions). Works at account, campaign, ad set, or ad level. Provide either a date_preset OR a time_range.",
       inputSchema: {
@@ -298,6 +305,7 @@ export function registerTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "list_pages",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "List Facebook Pages the authenticated System User manages. Returns id, name, category, fan_count, and link.",
       inputSchema: {
@@ -317,6 +325,7 @@ export function registerTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "list_page_posts",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "List recent posts on a Facebook Page (newest first). Read-only.",
       inputSchema: {
@@ -339,6 +348,7 @@ export function registerTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "get_page_insights",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description:
         "Fetch insights metrics for a Facebook Page (impressions, engaged users, fans, etc.). Provide either a date_preset OR a time_range.",
       inputSchema: {
@@ -389,6 +399,7 @@ export function registerTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "create_page_post",
     {
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       description:
         "Create a new post on a Facebook Page. WRITE OPERATION. Set published=false to create as an unpublished draft. Returns the new post ID.",
       inputSchema: {
@@ -422,6 +433,7 @@ export function registerTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "delete_page_post",
     {
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       description:
         "Delete a post from a Facebook Page. DESTRUCTIVE — cannot be undone. Returns Graph's success payload.",
       inputSchema: {
@@ -448,6 +460,7 @@ export function registerTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "list_creatives",
     {
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       description: "List ad creatives inside an ad account.",
       inputSchema: {
         account_id: z

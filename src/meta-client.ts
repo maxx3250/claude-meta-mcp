@@ -35,7 +35,7 @@ export class MetaClient {
     this.http = axios.create({
       baseURL: `https://graph.facebook.com/${apiVersion}`,
       timeout: 30_000,
-      headers: { "User-Agent": "claude-meta-mcp/0.1.0" },
+      headers: { "User-Agent": "claude-meta-mcp/0.5.0" },
     });
   }
 
