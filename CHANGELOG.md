@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-10-04
+
+Files finally get into the connector: from a ChatGPT attachment, from a built-in upload page, or from a URL — and out again as stable public asset URLs.
+
+### Added
+- **ChatGPT file hand-over**: `upload_ad_image`, `upload_ad_video` and `create_instagram_post` declare `_meta["openai/fileParams"] = ["file"]` and accept a `file` object (`download_url`, `file_id`, optional `mime_type`, `file_name`). The connector downloads the bytes itself; other clients see an optional parameter.
+- **Asset store** (`src/lib/assets.ts`, enabled by `UPLOAD_DIR`): files are stored as `<128-bit-random-id>.<ext>` and served immutably at `PUBLIC_URL/assets/…`; metadata lives in a private `.meta/` sidecar directory the static server refuses to serve. Only `image/*` and `video/*`.
+- **Upload page** `GET /upload` (drag & drop, `de`/`en` via `UPLOAD_PAGE_LANG`), `PUT /upload` (raw body, `X-File-Name`), `GET /upload/list`. Served only over loopback — the reverse proxy authenticates (nginx `auth_basic`), see `docs/DEPLOYMENT.md` §9.
+- **`list_assets`** read tool: recent uploads with public URLs, so "use the image I just uploaded" works.
+- Upload tools return `asset_url` / `asset_id` for files that did not come from a public URL (ChatGPT file, base64), so the same file can be posted to Instagram.
+- `HOST` env to bind to `127.0.0.1` behind a local proxy; `/health` reports `asset_store`.
+
+### Changed
+- `upload_ad_image` / `upload_ad_video`: `source` is now optional (one of `source` or `file` is required; a missing one gives an actionable error pointing at the upload page).
+- Unit tests for the asset store and the ChatGPT file schema.
+
+### Tool count
+- v0.5.0: 56 tools
+- **v0.6.0: 57 tools** (+ `list_assets`)
+
 ## [0.5.0] — 2026-09-13
 
 Ad sets become fully steerable from a conversation, with a safety layer in front of everything that moves money.
