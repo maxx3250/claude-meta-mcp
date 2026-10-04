@@ -12,6 +12,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MetaClient } from "./meta-client.js";
+import type { AssetStore } from "./lib/assets.js";
+import { chatgptFileSchema, FILE_PARAMS_META, downloadChatGptFile, storeBlob } from "./lib/files.js";
 
 function asJson(value: unknown): { content: { type: "text"; text: string }[] } {
   return {
@@ -55,7 +57,7 @@ async function waitForContainerReady(
   throw new Error(`Instagram media container ${containerId} did not reach FINISHED within ${maxWaitMs}ms`);
 }
 
-export function registerInstagramTools(server: McpServer, meta: MetaClient): void {
+export function registerInstagramTools(server: McpServer, meta: MetaClient, assets?: AssetStore): void {
   // -------------------------------------------------------------- Account discovery
 
   server.registerTool(
@@ -168,9 +170,11 @@ export function registerInstagramTools(server: McpServer, meta: MetaClient): voi
     "create_instagram_post",
     {
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      _meta: FILE_PARAMS_META,
       description:
         "Publish a single image, video, or reel to an Instagram Business account. WRITE OPERATION. " +
-        "Image/Video must be reachable via a public URL (Meta downloads it server-side). " +
+        "Image/Video must be reachable via a public URL (Meta downloads it server-side) — give image_url / video_url " +
+        "(e.g. from list_assets), or in ChatGPT attach a `file`: the connector stores it and uses its public URL. " +
         "For carousels (multi-image), use create_instagram_carousel. " +
         "Reels/videos are processed asynchronously — this tool waits up to 90s for the container to finish before publishing.",
       inputSchema: {
@@ -182,18 +186,44 @@ export function registerInstagramTools(server: McpServer, meta: MetaClient): voi
         caption: z.string().optional().describe("Caption text (max 2200 chars). Hashtags allowed."),
         thumb_offset: z.number().int().nonnegative().optional().describe("For VIDEO/REELS: ms offset for the cover frame"),
         location_id: z.string().optional().describe("Optional Facebook Place ID for location tag"),
+        file: chatgptFileSchema.optional(),
       },
     },
-    async ({ ig_user_id, page_id, media_type, image_url, video_url, caption, thumb_offset, location_id }) => {
+    async ({ ig_user_id, page_id, media_type, image_url, video_url, caption, thumb_offset, location_id, file }) => {
       const pageToken = await meta.getPageAccessToken(page_id);
+
+      let imageUrl = image_url;
+      let videoUrl = video_url;
+      let storedAsset: { id: string; url: string } | undefined;
+      if (file) {
+        if (!assets) {
+          throw new Error(
+            "A ChatGPT file can only be published when the connector's asset store is configured (UPLOAD_DIR), " +
+              "because Meta fetches Instagram media from a public URL. Pass image_url / video_url instead."
+          );
+        }
+        const isImage = media_type === "IMAGE";
+        const blob = await downloadChatGptFile(meta, file, {
+          mime: isImage ? "image/jpeg" : "video/mp4",
+          filename: isImage ? "image.jpg" : "video.mp4",
+        });
+        const asset = await storeBlob(assets, blob, {
+          file_name: file.file_name,
+          mime_type: file.mime_type,
+          source: "chatgpt-file",
+        });
+        storedAsset = { id: asset.id, url: asset.url };
+        if (isImage) imageUrl = asset.url;
+        else videoUrl = asset.url;
+      }
 
       const containerBody: Record<string, string | number> = {};
       if (media_type === "IMAGE") {
-        if (!image_url) throw new Error("media_type IMAGE requires image_url");
-        containerBody.image_url = image_url;
+        if (!imageUrl) throw new Error("media_type IMAGE requires image_url (or an attached file)");
+        containerBody.image_url = imageUrl;
       } else {
-        if (!video_url) throw new Error(`media_type ${media_type} requires video_url`);
-        containerBody.video_url = video_url;
+        if (!videoUrl) throw new Error(`media_type ${media_type} requires video_url (or an attached file)`);
+        containerBody.video_url = videoUrl;
         containerBody.media_type = media_type;
         if (thumb_offset !== undefined) containerBody.thumb_offset = thumb_offset;
       }
@@ -219,7 +249,11 @@ export function registerInstagramTools(server: McpServer, meta: MetaClient): voi
         { access_token: pageToken }
       );
 
-      return asJson({ container_id: container.id, media_id: published.id });
+      return asJson({
+        container_id: container.id,
+        media_id: published.id,
+        ...(storedAsset ? { asset_url: storedAsset.url, asset_id: storedAsset.id } : {}),
+      });
     }
   );
 

@@ -32,6 +32,8 @@ function optionalInt(name: string): number | undefined {
 
 export const config = {
   port: parseInt(optional("PORT", "3210"), 10),
+  /** Interface to bind. Use 127.0.0.1 when a local reverse proxy sits in front (recommended). */
+  host: optional("HOST", "0.0.0.0"),
   logLevel: optional("LOG_LEVEL", "info") as
     | "debug"
     | "info"
@@ -56,6 +58,16 @@ export const config = {
   limits: {
     maxDailyBudgetCents: optionalInt("MAX_DAILY_BUDGET_CENTS"),
     maxLifetimeBudgetCents: optionalInt("MAX_LIFETIME_BUDGET_CENTS"),
+  },
+  /**
+   * Asset store + /upload page. Enabled when UPLOAD_DIR is set. Files are
+   * served at PUBLIC_URL/assets/<random-id>.<ext>; the reverse proxy must
+   * authenticate /upload (see docs/DEPLOYMENT.md).
+   */
+  upload: {
+    dir: process.env.UPLOAD_DIR && process.env.UPLOAD_DIR.trim() !== "" ? process.env.UPLOAD_DIR.trim() : undefined,
+    maxMb: optionalInt("UPLOAD_MAX_MB") ?? 100,
+    pageLang: (optional("UPLOAD_PAGE_LANG", "en") === "de" ? "de" : "en") as "en" | "de",
   },
 } as const;
 
