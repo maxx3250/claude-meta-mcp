@@ -193,3 +193,44 @@ pm2 reload claude-meta-mcp --update-env
 **Backup.** Nothing to back up in v0.2 — the service is stateless. Just keep `.env` safe (Meta token + Bearer secret).
 
 **Monitoring.** Hit `/health` from your uptime checker. Alert on non-200 responses or pm2 restart loops.
+
+## 9. Upload page & asset store (v0.6)
+
+Set `UPLOAD_DIR` (and `HOST=127.0.0.1`) in `.env`, create the directory, then route two prefixes in nginx. The connector refuses `/upload` requests that do not arrive over loopback, so the `auth_basic` here **is** the login — reuse the htpasswd file of the OAuth shim so people have one password:
+
+```nginx
+    location ^~ /upload {
+        auth_basic "Meta Connector";
+        auth_basic_user_file /etc/nginx/.htpasswd_connector;   # must be readable by the nginx user (www-data)
+        client_max_body_size 100M;
+        proxy_request_buffering off;
+        proxy_pass http://127.0.0.1:3210;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Transfer-Encoding "";
+    }
+
+    # Public, unguessable asset URLs (Meta fetches Instagram media from here).
+    location ^~ /assets/ {
+        proxy_pass http://127.0.0.1:3210;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Transfer-Encoding "";
+    }
+```
+
+Place both blocks **before** the catch-all `location /` that forwards to the OAuth shim. Then:
+
+```bash
+mkdir -p /var/lib/claude-meta-mcp/assets
+chgrp www-data /etc/nginx/.htpasswd_connector && chmod 640 /etc/nginx/.htpasswd_connector
+nginx -t && systemctl reload nginx
+pm2 restart claude-meta-mcp --update-env
+curl -i https://connector.example.com/upload          # → 401 without login
+```
+
+ChatGPT additionally needs a **refresh of the app** (Plugins → your app → refresh) to pick up the new `file` parameters; it then shows a file picker for `upload_ad_image`, `upload_ad_video` and `create_instagram_post`.

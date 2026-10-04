@@ -22,8 +22,11 @@ import { registerWriteTools } from "./tools-write.js";
 import { registerInstagramTools } from "./tools-instagram.js";
 import { registerCatalogTools } from "./tools-catalogs.js";
 import { registerAudienceTools } from "./tools-audiences.js";
+import { registerAssetTools } from "./tools-assets.js";
+import { AssetStore } from "./lib/assets.js";
+import { registerUploadRoutes } from "./upload-page.js";
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 
 function log(
   level: "debug" | "info" | "warn" | "error",
@@ -61,15 +64,19 @@ function bearerAuth(req: Request, res: Response, next: NextFunction): void {
 
 async function main(): Promise<void> {
   const meta = new MetaClient(config.meta.accessToken, config.meta.apiVersion);
+  const assets = config.upload.dir ? new AssetStore(config.upload.dir, config.publicUrl) : undefined;
+  if (assets) await assets.init();
+
   const mcp = new McpServer({
     name: "claude-meta-mcp",
     version: VERSION,
   });
   registerTools(mcp, meta);
-  registerWriteTools(mcp, meta);
-  registerInstagramTools(mcp, meta);
+  registerWriteTools(mcp, meta, assets);
+  registerInstagramTools(mcp, meta, assets);
   registerCatalogTools(mcp, meta);
   registerAudienceTools(mcp, meta);
+  registerAssetTools(mcp, assets);
 
   const app = express();
   app.disable("x-powered-by");
@@ -82,8 +89,17 @@ async function main(): Promise<void> {
       server: "claude-meta-mcp",
       version: VERSION,
       meta_api_version: config.meta.apiVersion,
+      asset_store: Boolean(assets),
     });
   });
+
+  if (assets) {
+    registerUploadRoutes(app, assets, {
+      maxMb: config.upload.maxMb,
+      lang: config.upload.pageLang,
+      publicUrl: config.publicUrl,
+    });
+  }
 
   app.post("/mcp", bearerAuth, async (req, res) => {
     const transport = new StreamableHTTPServerTransport({
@@ -120,16 +136,18 @@ async function main(): Promise<void> {
   app.use((req, res) => {
     res.status(404).json({
       error: "not_found",
-      message: `${req.method} ${req.path} is not a valid endpoint. Use GET /health or POST /mcp.`,
+      message: `${req.method} ${req.path} is not a valid endpoint. Use GET /health, POST /mcp${assets ? ", GET /upload or GET /assets/<id>" : ""}.`,
     });
   });
 
-  app.listen(config.port, () => {
+  app.listen(config.port, config.host, () => {
     log("info", "claude-meta-mcp listening", {
+      host: config.host,
       port: config.port,
       version: VERSION,
       public_url: config.publicUrl,
       meta_api_version: config.meta.apiVersion,
+      asset_store: assets ? config.upload.dir : null,
     });
   });
 }

@@ -16,6 +16,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MetaClient } from "./meta-client.js";
 import { config } from "./config.js";
+import type { AssetStore } from "./lib/assets.js";
+import { chatgptFileSchema, FILE_PARAMS_META, resolveMedia } from "./lib/files.js";
 import { assertBudgetChangeAllowed, parseCents } from "./lib/guards.js";
 import {
   targetingSchema,
@@ -119,32 +121,33 @@ const assetSourceSchema = z
     message: "Provide exactly one of `url` or `data_base64`",
   });
 
-export function registerWriteTools(server: McpServer, meta: MetaClient): void {
+export function registerWriteTools(server: McpServer, meta: MetaClient, assets?: AssetStore): void {
   // ============================================================ Asset uploads
 
   server.registerTool(
     "upload_ad_image",
     {
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      annotations: WRITE,
+      _meta: FILE_PARAMS_META,
       description:
-        "Upload an image to an ad account's image library. Returns the image hash (use this in ad creative `image_hash`). WRITE OPERATION.",
+        "Upload an image to an ad account's image library and return its image hash (used as `image_hash` in " +
+        "create_ad_creative). Accepts `source` (public URL or base64) or — in ChatGPT — an attached `file`; or let the " +
+        "user upload on the connector's /upload page and take the URL from list_assets. Files that did not come from a " +
+        "public URL are kept in the asset store and their URL is returned (reusable for Instagram). WRITE OPERATION.",
       inputSchema: {
         account_id: z.string().describe("Ad account ID (with or without 'act_' prefix)"),
-        source: assetSourceSchema,
+        source: assetSourceSchema.optional(),
+        file: chatgptFileSchema.optional(),
       },
     },
-    async ({ account_id, source }) => {
-      const blob = await meta.fetchAsBlob({
-        ...source,
-        mime: source.mime ?? "image/jpeg",
-        filename: source.filename ?? "image.jpg",
-      });
+    async ({ account_id, source, file }) => {
+      const { blob, asset } = await resolveMedia(meta, assets, { source, file }, { mime: "image/jpeg", filename: "image.jpg" });
       const data = await meta.postMultipart<{
         images?: Record<string, { hash: string; url: string }>;
       }>(`/${normalizeAdAccountId(account_id)}/adimages`, {
         filename: blob,
       });
-      return asJson(data);
+      return asJson({ ...(data as object), ...(asset ? { asset_url: asset.url, asset_id: asset.id } : {}) });
     }
   );
 
@@ -170,26 +173,23 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
   server.registerTool(
     "upload_ad_video",
     {
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      annotations: WRITE,
+      _meta: FILE_PARAMS_META,
       description:
-        "Upload a video to an ad account. Small videos (<50MB) upload in one request. Returns the video ID. " +
-        "Videos process asynchronously — use get_video_processing_status to poll readiness. WRITE OPERATION.",
+        "Upload a video to an ad account and return the video ID. Accepts `source` (public URL or base64) or — in " +
+        "ChatGPT — an attached `file`; or a URL from list_assets. Videos process asynchronously — use " +
+        "get_video_processing_status to poll readiness. Files that did not come from a public URL are kept in the " +
+        "asset store and their URL is returned. WRITE OPERATION.",
       inputSchema: {
         account_id: z.string().describe("Ad account ID"),
-        source: assetSourceSchema,
+        source: assetSourceSchema.optional(),
+        file: chatgptFileSchema.optional(),
         title: z.string().optional().describe("Optional video title"),
         description: z.string().optional().describe("Optional video description"),
       },
     },
-    async ({ account_id, source, title, description }) => {
-      const blob = await meta.fetchAsBlob({
-        ...source,
-        mime: source.mime ?? "video/mp4",
-        filename: source.filename ?? "video.mp4",
-      });
-
-      // For simplicity, single-shot upload. Meta accepts up to ~1GB on /advideos
-      // when sent as multipart, though chunked is recommended for >50MB.
+    async ({ account_id, source, file, title, description }) => {
+      const { blob, asset } = await resolveMedia(meta, assets, { source, file }, { mime: "video/mp4", filename: "video.mp4" });
       const data = await meta.postMultipart<{ id?: string }>(
         `/${normalizeAdAccountId(account_id)}/advideos`,
         {
@@ -198,7 +198,7 @@ export function registerWriteTools(server: McpServer, meta: MetaClient): void {
           description,
         }
       );
-      return asJson(data);
+      return asJson({ ...(data as object), ...(asset ? { asset_url: asset.url, asset_id: asset.id } : {}) });
     }
   );
 

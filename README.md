@@ -6,12 +6,12 @@
 [![CI](https://github.com/maxx3250/claude-meta-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/maxx3250/claude-meta-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-Streamable_HTTP-blue.svg)](https://modelcontextprotocol.io/)
-[![Status](https://img.shields.io/badge/status-v0.5_alpha-orange.svg)](./CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.6_alpha-orange.svg)](./CHANGELOG.md)
 
-> **Status — v0.5.0 (single-tenant alpha).**
+> **Status — v0.6.0 (single-tenant alpha).**
 > One Meta System User token, one shared Bearer secret, no database. Perfect for personal use or a single agency account. Multi-tenant + OAuth 2.1 + DCR are on the roadmap (see [Roadmap](#roadmap)).
 >
-> **v0.5 makes ad sets fully steerable from a conversation**: complete targeting spec on create *and* update (custom audiences, exclusions, placements, Advantage+ audience), `promoted_object` for conversion ad sets, audience / pixel lookups, a delivery estimate, and a safety layer — activation only through explicit `set_*_status` tools, budget raises need confirmation, optional hard caps. Every tool carries MCP annotations (`readOnlyHint` / `destructiveHint`) so clients can auto-approve reads. **56 tools** across four surfaces — Ads, Pages, Instagram, Catalogs.
+> **v0.6 closes the file gap**: images and videos reach the connector from a ChatGPT attachment (Apps SDK `openai/fileParams`), from a built-in upload page, or from any public URL — and get a stable, unguessable URL that Instagram publishing can use. **v0.5 made ad sets fully steerable from a conversation**: complete targeting spec on create *and* update (custom audiences, exclusions, placements, Advantage+ audience), `promoted_object` for conversion ad sets, audience / pixel lookups, a delivery estimate, and a safety layer — activation only through explicit `set_*_status` tools, budget raises need confirmation, optional hard caps. Every tool carries MCP annotations (`readOnlyHint` / `destructiveHint`) so clients can auto-approve reads. **57 tools** across four surfaces — Ads, Pages, Instagram, Catalogs.
 
 ---
 
@@ -69,7 +69,7 @@ The server listens on `PORT` (default `3210`) and exposes:
 
 ## Available tools
 
-56 tools in v0.5 across four surfaces — Ads (read + write), Facebook Pages (read + write), Instagram Business (read + write), Product Catalogs (read).
+57 tools in v0.6 across four surfaces — Ads (read + write), Facebook Pages (read + write), Instagram Business (read + write), Product Catalogs (read).
 
 > **Safety (v0.5):**
 > - Campaigns, ad sets and ads are **always created `PAUSED`** — there is no way to create something live.
@@ -96,14 +96,15 @@ The server listens on `PORT` (default `3210`) and exposes:
 | `get_custom_audience` | One audience in detail incl. rule (pixel + event + retention) and lookalike spec |
 | `list_pixels` | Pixels / datasets of an ad account (id for `promoted_object.pixel_id`) |
 | `get_pixel_events` | Events the pixel actually received in the last N days, with counts |
+| `list_assets` | Files the user uploaded on the connector's `/upload` page or attached in ChatGPT, newest first, with public URLs |
 
 ### Meta Ads — write & assets
 
 | Tool | What it does |
 |---|---|
-| `upload_ad_image` | Upload an image (URL or base64) to an ad account's library; returns image hash |
+| `upload_ad_image` | Upload an image to the ad account's library (from a public URL, base64, a ChatGPT attachment, or an `/upload`-page file); returns the image hash |
 | `list_ad_images` | List images in an ad account's library |
-| `upload_ad_video` | Upload a video (URL or base64) to an ad account; returns video id |
+| `upload_ad_video` | Upload a video to the ad account (same sources as images); returns the video id |
 | `get_video_processing_status` | Poll Meta's async transcoding status for an uploaded video |
 | `list_ad_videos` | List videos uploaded to an ad account |
 | `create_ad_creative` | Create an ad creative from a Page post or `object_story_spec` (link_data / video_data) |
@@ -121,6 +122,18 @@ The server listens on `PORT` (default `3210`) and exposes:
 | `set_adset_status` ⚠️ | The **only** way to activate an ad set |
 | `set_ad_status` ⚠️ | The **only** way to activate an ad |
 | `preview_ad` | Render a preview HTML iframe for any placement (DESKTOP_FEED_STANDARD, INSTAGRAM_STANDARD, …) |
+
+### Getting images and videos into the connector
+
+No chat client can hand raw file bytes to an MCP tool — the model only writes JSON. v0.6 gives you three ways in:
+
+| Way | How | Works in |
+|---|---|---|
+| **Public URL** | `source.url` / `image_url` — the connector (or Meta) downloads it | every client |
+| **ChatGPT attachment** | the upload tools and `create_instagram_post` declare a `file` parameter via `_meta["openai/fileParams"]`; ChatGPT shows a file picker, hands over a temporary `download_url`, the connector fetches the bytes | ChatGPT (developer mode) |
+| **Upload page** | `GET /upload` on your connector: drag & drop, each file gets `PUBLIC_URL/assets/<128-bit-id>.<ext>`; the model finds it via `list_assets` ("use the image I just uploaded") | every client |
+
+Files that did not come from a public URL are kept in the asset store (`UPLOAD_DIR`) and the upload tools return their `asset_url`, so the same file can go to Instagram afterwards (Meta fetches Instagram media from a public URL). The connector serves `/upload` only over loopback — your reverse proxy must authenticate it (nginx `auth_basic` with the same htpasswd as the OAuth shim is the natural fit, see [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)). `/assets/*` is public but unguessable.
 
 ### Facebook Pages (read & write)
 
@@ -176,6 +189,10 @@ The server listens on `PORT` (default `3210`) and exposes:
 | `AUTH_TOKEN` | yes | — | Shared bearer secret for `POST /mcp`. Generate with `openssl rand -hex 32` |
 | `PUBLIC_URL` | no | `http://localhost:3210` | Public URL (currently informational; v0.2 will use it for OAuth callbacks) |
 | `PORT` | no | `3210` | TCP port to bind |
+| `HOST` | no | `0.0.0.0` | Interface to bind. Use `127.0.0.1` behind a local reverse proxy |
+| `UPLOAD_DIR` | no | — | Enables the asset store and `/upload` page; files are stored here and served at `PUBLIC_URL/assets/…` |
+| `UPLOAD_MAX_MB` | no | `100` | Size limit per uploaded file (also raise `client_max_body_size` in the proxy) |
+| `UPLOAD_PAGE_LANG` | no | `en` | `en` or `de` — language of the upload page |
 | `LOG_LEVEL` | no | `info` | `debug` / `info` / `warn` / `error` |
 | `MAX_DAILY_BUDGET_CENTS` | no | — | Hard cap for any daily budget written by the connector (account currency, cents). Unset = no cap |
 | `MAX_LIFETIME_BUDGET_CENTS` | no | — | Hard cap for any lifetime budget written by the connector |
@@ -198,7 +215,7 @@ See [`.env.example`](./.env.example).
 
 ---
 
-## Architecture (v0.5)
+## Architecture (v0.6)
 
 ```
 ┌─────────────────────┐     POST /mcp        ┌──────────────────────────┐
@@ -214,7 +231,7 @@ See [`.env.example`](./.env.example).
                                              https://graph.facebook.com
 ```
 
-No database. No state between requests. One Meta System User token, one Bearer token, 56 tools.
+No database. No state between requests. One Meta System User token, one Bearer token, 57 tools. Optional asset store on disk when `UPLOAD_DIR` is set.
 
 For sequence diagrams and the planned v1.0 multi-tenant architecture, see [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
@@ -224,6 +241,10 @@ For sequence diagrams and the planned v1.0 multi-tenant architecture, see [`docs
 
 **v0.2 — Pages support** ✓ shipped
 - [x] `list_pages`, `list_page_posts`, `get_page_insights`, `create_page_post`, `delete_page_post`
+
+**v0.6 — Files in** ✓ shipped
+- [x] ChatGPT attachments via `openai/fileParams` on upload tools + Instagram posting
+- [x] Asset store + `/upload` page + `list_assets`; `HOST` bind
 
 **v0.5 — Ad set steering + safety layer** ✓ shipped
 - [x] Full targeting spec on create + update (merge / unset / replace), `promoted_object`, DSA fields
