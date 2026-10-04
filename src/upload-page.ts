@@ -111,7 +111,7 @@ export function renderUploadPage(opts: UploadPageOptions): string {
   main { max-width: 720px; margin: 0 auto; padding: 32px 20px 64px; }
   h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
   p.intro { color: var(--muted); margin: 0 0 1.25rem; }
-  .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 36px 20px; text-align:center; background: var(--card); cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop { display: block; border: 2px dashed var(--line); border-radius: 12px; padding: 36px 20px; text-align:center; background: var(--card); cursor: pointer; transition: border-color .15s, background .15s; }
   .drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--card)); }
   .drop input { display:none; }
   .drop button { font: inherit; padding: 10px 18px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
